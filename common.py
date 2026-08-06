@@ -48,3 +48,11 @@ def create_tun_interface(dev_name="tun0"):
         sys.exit(1)
 
     return tun_fd, dev_name
+
+def caesar_encrypt(data: bytes, shift: int) -> bytes:
+    shift = shift % 256
+    return bytes((b + shift) % 256 for b in data)
+
+def caesar_decrypt(data: bytes, shift: int) -> bytes:
+    shift = shift % 256
+    return bytes((b - shift) % 256 for b in data)
