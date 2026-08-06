@@ -2,6 +2,8 @@ import socket
 import threading
 import ipaddress
 import os
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from common import (
     DEFAULT_PORT, DEFAULT_PSK, create_tun_interface, 
     server_handshake, caesar_encrypt, caesar_decrypt, 
@@ -35,6 +37,26 @@ class ClientManager:
     def get_active_count(self):
         with self.lock:
             return len(self.active_clients)
+
+class StatusHandler(BaseHTTPRequestHandler):
+    client_mgr = None
+
+    def do_GET(self):
+        if self.path == "/status":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            data = {"active_connections": StatusHandler.client_mgr.get_active_count()}
+            self.wfile.write(json.dumps(data).encode('utf-8'))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def start_status_api(client_mgr, port=9200):
+    StatusHandler.client_mgr = client_mgr
+    server = HTTPServer(("0.0.0.0", port), StatusHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
 
 def forward_tun_to_socket(tun_fd, client_sockets, lock, shift):
     while True:
@@ -79,6 +101,8 @@ def handle_vpn_client(client_sock, addr, client_mgr, tun_fd):
 
 def main():
     client_mgr = ClientManager("10.8.0.0/24")
+    start_status_api(client_mgr)
+    
     tun_fd, dev_name = create_tun_interface("tun0")
     os.system(f"ip addr add {client_mgr.server_ip}/24 dev {dev_name}")
     os.system(f"ip link set dev {dev_name} up")
