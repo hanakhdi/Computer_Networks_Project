@@ -35,3 +35,65 @@ class ClientManager:
     def get_active_count(self):
         with self.lock:
             return len(self.active_clients)
+
+def forward_tun_to_socket(tun_fd, client_sockets, lock, shift):
+    while True:
+        try:
+            packet = os.read(tun_fd, 2048)
+            if not packet:
+                break
+            encrypted = caesar_encrypt(packet, shift)
+            frame = pack_frame(4, 1, 1, 0, 1, encrypted)
+            with lock:
+                for sock in list(client_sockets.values()):
+                    try:
+                        sock.sendall(frame)
+                    except:
+                        pass
+        except Exception:
+            break
+
+def handle_vpn_client(client_sock, addr, client_mgr, tun_fd):
+    client_id = f"{addr[0]}:{addr[1]}"
+    try:
+        shift = server_handshake(client_sock, DEFAULT_PSK)
+        assigned_ip = client_mgr.allocate_ip(client_id)
+        print(f"[+] Client {client_id} authenticated. Assigned VIP: {assigned_ip}")
+
+        reassembler = Reassembler()
+        while True:
+            meta, payload = recv_frame(client_sock)
+            if not meta:
+                break
+            decrypted = caesar_decrypt(payload, shift)
+            packet = reassembler.add_fragment(meta["packet_id"], meta["frag_idx"], meta["frag_count"], decrypted)
+            if packet:
+                os.write(tun_fd, packet)
+
+    except Exception as e:
+        print(f"[!] Error handling client {client_id}: {e}")
+    finally:
+        client_mgr.release_ip(client_id)
+        client_sock.close()
+        print(f"[-] Client {client_id} disconnected")
+
+def main():
+    client_mgr = ClientManager("10.8.0.0/24")
+    tun_fd, dev_name = create_tun_interface("tun0")
+    os.system(f"ip addr add {client_mgr.server_ip}/24 dev {dev_name}")
+    os.system(f"ip link set dev {dev_name} up")
+
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_sock.bind(("0.0.0.0", DEFAULT_PORT))
+    server_sock.listen(10)
+    print(f"[*] Server initialized on {DEFAULT_PORT} with interface {dev_name}")
+
+    while True:
+        sock, addr = server_sock.accept()
+        t = threading.Thread(target=handle_vpn_client, args=(sock, addr, client_mgr, tun_fd))
+        t.daemon = True
+        t.start()
+
+if __name__ == "__main__":
+    main()
