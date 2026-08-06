@@ -169,3 +169,38 @@ def server_handshake(sock, psk: bytes):
 
     shift = _derive_shift(psk, client_nonce, server_nonce)
     return shift
+
+class Reassembler:
+    def __init__(self, timeout=FRAGMENT_TIMEOUT):
+        self.lock = threading.RLock()
+        self.buffers = {}
+        self.timeout = timeout
+
+    def add_fragment(self, packet_id: int, frag_idx: int, frag_count: int, payload: bytes):
+        with self.lock:
+            now = time.time()
+            self._cleanup_stale(now)
+
+            if packet_id not in self.buffers:
+                self.buffers[packet_id] = {
+                    "count": frag_count,
+                    "received": {},
+                    "timestamp": now
+                }
+
+            buf = self.buffers[packet_id]
+            buf["received"][frag_idx] = payload
+
+            if len(buf["received"]) == buf["count"]:
+                assembled = bytearray()
+                for i in range(buf["count"]):
+                    assembled.extend(buf["received"][i])
+                del self.buffers[packet_id]
+                return bytes(assembled)
+            
+            return None
+
+    def _cleanup_stale(self, now):
+        stale_ids = [pid for pid, b in self.buffers.items() if now - b["timestamp"] > self.timeout]
+        for pid in stale_ids:
+            del self.buffers[pid]
