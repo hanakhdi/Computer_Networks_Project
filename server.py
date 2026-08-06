@@ -2,6 +2,8 @@ import socket
 import threading
 import ipaddress
 import os
+import sys
+import signal
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from common import (
@@ -111,13 +113,29 @@ def main():
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_sock.bind(("0.0.0.0", DEFAULT_PORT))
     server_sock.listen(10)
+
+    def sig_handler(sig, frame):
+        print("\n[*] Server shutting down gracefully...")
+        server_sock.close()
+        try:
+            os.close(tun_fd)
+        except:
+            pass
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, sig_handler)
+    signal.signal(signal.SIGTERM, sig_handler)
+
     print(f"[*] Server initialized on {DEFAULT_PORT} with interface {dev_name}")
 
     while True:
-        sock, addr = server_sock.accept()
-        t = threading.Thread(target=handle_vpn_client, args=(sock, addr, client_mgr, tun_fd))
-        t.daemon = True
-        t.start()
+        try:
+            sock, addr = server_sock.accept()
+            t = threading.Thread(target=handle_vpn_client, args=(sock, addr, client_mgr, tun_fd))
+            t.daemon = True
+            t.start()
+        except OSError:
+            break
 
 if __name__ == "__main__":
     main()
