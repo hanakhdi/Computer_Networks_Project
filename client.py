@@ -2,6 +2,7 @@ import os
 import sys
 import socket
 import threading
+import signal
 import argparse
 from common import (
     DEFAULT_PORT, DEFAULT_PSK, create_tun_interface, 
@@ -61,6 +62,22 @@ def main():
         for r in args.route:
             route_mgr.add_route(r, dev_name)
 
+    def handle_signal(sig, frame):
+        print("\n[*] Shutting down client...")
+        route_mgr.cleanup()
+        try:
+            sock.close()
+        except:
+            pass
+        try:
+            os.close(tun_fd)
+        except:
+            pass
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
     t1 = threading.Thread(target=tun_to_socket_loop, args=(tun_fd, sock, shift), daemon=True)
     t2 = threading.Thread(target=socket_to_tun_loop, args=(sock, tun_fd, shift), daemon=True)
     t1.start()
@@ -70,7 +87,7 @@ def main():
         t1.join()
         t2.join()
     except KeyboardInterrupt:
-        print("\n[*] Shutting down client...")
+        pass
     finally:
         route_mgr.cleanup()
         sock.close()
