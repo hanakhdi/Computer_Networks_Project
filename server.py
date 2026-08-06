@@ -1,28 +1,37 @@
 import socket
 import threading
-from common import DEFAULT_PORT
+import ipaddress
+import os
+from common import (
+    DEFAULT_PORT, DEFAULT_PSK, create_tun_interface, 
+    server_handshake, caesar_encrypt, caesar_decrypt, 
+    pack_frame, recv_frame, Reassembler
+)
 
-def handle_client(client_sock, addr):
-    print(f"[*] Connection accepted from {addr}")
-    try:
-        data = client_sock.recv(1024)
-        if data:
-            client_sock.sendall(b"ACK: " + data)
-    finally:
-        client_sock.close()
+class ClientManager:
+    def __init__(self, subnet="10.8.0.0/24"):
+        self.lock = threading.RLock()
+        self.network = ipaddress.ip_network(subnet)
+        self.hosts = [str(ip) for ip in self.network.hosts()]
+        self.server_ip = self.hosts[0]
+        self.available_ips = set(self.hosts[1:])
+        self.active_clients = {}
 
-def main():
-    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_sock.bind(("0.0.0.0", DEFAULT_PORT))
-    server_sock.listen(5)
-    print(f"[*] Server listening on port {DEFAULT_PORT}")
+    def allocate_ip(self, client_id):
+        with self.lock:
+            if not self.available_ips:
+                return None
+            ip = sorted(list(self.available_ips))[0]
+            self.available_ips.remove(ip)
+            self.active_clients[client_id] = ip
+            return ip
 
-    while True:
-        client_sock, addr = server_sock.accept()
-        t = threading.Thread(target=handle_client, args=(client_sock, addr))
-        t.daemon = True
-        t.start()
+    def release_ip(self, client_id):
+        with self.lock:
+            if client_id in self.active_clients:
+                ip = self.active_clients.pop(client_id)
+                self.available_ips.add(ip)
 
-if __name__ == "__main__":
-    main()
+    def get_active_count(self):
+        with self.lock:
+            return len(self.active_clients)
