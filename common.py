@@ -95,3 +95,77 @@ def unpack_frame(raw_bytes: bytes):
         "frag_count": frag_count
     }
     return meta, payload
+
+def _derive_shift(psk: bytes, client_nonce: bytes, server_nonce: bytes) -> int:
+    hasher = hashlib.sha256()
+    hasher.update(psk)
+    hasher.update(client_nonce)
+    hasher.update(server_nonce)
+    digest = hasher.digest()
+    return digest[0]
+
+def recv_exact(sock, n):
+    data = bytearray()
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:
+            return None
+        data.extend(packet)
+    return bytes(data)
+
+def recv_frame(sock):
+    raw_len = recv_exact(sock, 4)
+    if not raw_len:
+        return None, None
+    length = struct.unpack("!I", raw_len)[0]
+    raw_frame = recv_exact(sock, length)
+    if not raw_frame:
+        return None, None
+    return unpack_frame(raw_frame)
+
+def client_handshake(sock, psk: bytes):
+    client_nonce = os.urandom(16)
+    init_frame = pack_frame(MSG_TYPE_HANDSHAKE_INIT, 0, 0, 0, 1, client_nonce)
+    sock.sendall(init_frame)
+
+    meta, payload = recv_frame(sock)
+    if not meta or meta["msg_type"] != MSG_TYPE_HANDSHAKE_RESP:
+        raise PermissionError("Handshake failed at INIT stage")
+
+    server_nonce = payload[:16]
+    server_hmac = payload[16:48]
+
+    expected_hmac = hmac.new(psk, client_nonce + server_nonce, hashlib.sha256).digest()
+    if not hmac.compare_digest(server_hmac, expected_hmac):
+        raise PermissionError("Server HMAC verification failed")
+
+    client_hmac = hmac.new(psk, server_nonce + client_nonce, hashlib.sha256).digest()
+    fin_frame = pack_frame(MSG_TYPE_HANDSHAKE_FIN, 0, 0, 0, 1, client_hmac)
+    sock.sendall(fin_frame)
+
+    shift = _derive_shift(psk, client_nonce, server_nonce)
+    return shift
+
+def server_handshake(sock, psk: bytes):
+    meta, payload = recv_frame(sock)
+    if not meta or meta["msg_type"] != MSG_TYPE_HANDSHAKE_INIT:
+        raise PermissionError("Expected HANDSHAKE_INIT")
+
+    client_nonce = payload
+    server_nonce = os.urandom(16)
+    server_hmac = hmac.new(psk, client_nonce + server_nonce, hashlib.sha256).digest()
+
+    resp_frame = pack_frame(MSG_TYPE_HANDSHAKE_RESP, 0, 0, 0, 1, server_nonce + server_hmac)
+    sock.sendall(resp_frame)
+
+    meta_fin, payload_fin = recv_frame(sock)
+    if not meta_fin or meta_fin["msg_type"] != MSG_TYPE_HANDSHAKE_FIN:
+        raise PermissionError("Expected HANDSHAKE_FIN")
+
+    client_hmac = payload_fin
+    expected_hmac = hmac.new(psk, server_nonce + client_nonce, hashlib.sha256).digest()
+    if not hmac.compare_digest(client_hmac, expected_hmac):
+        raise PermissionError("Client HMAC verification failed")
+
+    shift = _derive_shift(psk, client_nonce, server_nonce)
+    return shift
