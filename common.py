@@ -204,3 +204,22 @@ class Reassembler:
         stale_ids = [pid for pid, b in self.buffers.items() if now - b["timestamp"] > self.timeout]
         for pid in stale_ids:
             del self.buffers[pid]
+
+class RouteManager:
+    def __init__(self):
+        self.added_routes = []
+
+    def add_route(self, subnet, dev):
+        cmd = f"ip route add {subnet} dev {dev}"
+        if subprocess.call(cmd, shell=True) == 0:
+            self.added_routes.append((subnet, dev))
+
+    def setup_full_tunnel(self, server_ip, dev):
+        subprocess.call(f"ip route add {server_ip} via $(ip route show default | cut -d' ' -f3)", shell=True)
+        self.add_route("0.0.0.0/1", dev)
+        self.add_route("128.0.0.0/1", dev)
+
+    def cleanup(self):
+        for subnet, dev in self.added_routes:
+            subprocess.call(f"ip route del {subnet} dev {dev}", shell=True)
+        self.added_routes.clear()
