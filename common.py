@@ -30,6 +30,9 @@ TUNSETIFF = 0x400454ca
 IFF_TUN   = 0x0001
 IFF_NO_PI = 0x1000
 
+HEADER_FORMAT = "!4sBBIIHH"
+HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+
 def create_tun_interface(dev_name="tun0"):
     try:
         tun_fd = os.open("/dev/net/tun", os.O_RDWR)
@@ -56,3 +59,39 @@ def caesar_encrypt(data: bytes, shift: int) -> bytes:
 def caesar_decrypt(data: bytes, shift: int) -> bytes:
     shift = shift % 256
     return bytes((b - shift) % 256 for b in data)
+
+def pack_frame(msg_type: int, session_id: int, packet_id: int, frag_idx: int, frag_count: int, payload: bytes) -> bytes:
+    header = struct.pack(
+        HEADER_FORMAT,
+        MAGIC_BYTES,
+        PROTOCOL_VERSION,
+        msg_type,
+        session_id,
+        packet_id,
+        frag_idx,
+        frag_count
+    )
+    frame_data = header + payload
+    length_prefix = struct.pack("!I", len(frame_data))
+    return length_prefix + frame_data
+
+def unpack_frame(raw_bytes: bytes):
+    if len(raw_bytes) < HEADER_SIZE:
+        return None, None
+    
+    magic, version, msg_type, session_id, packet_id, frag_idx, frag_count = struct.unpack(
+        HEADER_FORMAT, raw_bytes[:HEADER_SIZE]
+    )
+    
+    if magic != MAGIC_BYTES or version != PROTOCOL_VERSION:
+        raise ValueError("Invalid protocol magic or version")
+        
+    payload = raw_bytes[HEADER_SIZE:]
+    meta = {
+        "msg_type": msg_type,
+        "session_id": session_id,
+        "packet_id": packet_id,
+        "frag_idx": frag_idx,
+        "frag_count": frag_count
+    }
+    return meta, payload
